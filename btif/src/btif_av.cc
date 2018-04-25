@@ -143,6 +143,11 @@ typedef struct {
   RawAddress peer_bd;
 } btif_av_sink_config_req_t;
 
+typedef struct {
+  RawAddress bd_addr;
+  btav_a2dp_codec_config_t codec_config;
+} btif_av_codec_config_req_t;
+
 /*****************************************************************************
  *  Static variables
  *****************************************************************************/
@@ -165,6 +170,7 @@ static bool enable_multicast = false;
 static bool is_multicast_supported = false;
 static bool multicast_disabled = false;
 static RawAddress retry_bda;
+static RawAddress codec_bda = {};
 static int conn_retry_count = 1;
 static alarm_t *av_coll_detected_timer = NULL;
 static bool isA2dpSink = false;
@@ -217,8 +223,6 @@ static bt_status_t connect_int(RawAddress *bd_addr, uint16_t uuid);
 void btif_av_update_current_playing_device(int index);
 static void btif_av_check_rc_connection_priority(void *p_data);
 static bt_status_t connect_int(RawAddress* bd_addr, uint16_t uuid);
-static bool btif_av_allow_codec_config_change(btav_a2dp_codec_index_t codec_type,
-                                        btav_a2dp_codec_sample_rate_t sample_rate);
 int btif_get_is_remote_started_idx();
 static void btif_av_reset_remote_started_flag();
 
@@ -456,11 +460,8 @@ void btif_av_peer_config_dump()
 static void btif_update_source_codec(void* p_data) {
   BTIF_TRACE_DEBUG("%s", __func__);
 
-  // copy to avoid alignment problems
-  btav_a2dp_codec_config_t req;
-  memcpy(&req, p_data, sizeof(req));
-
-  btif_a2dp_source_encoder_user_config_update_req(req);
+  btif_av_codec_config_req_t *req = (btif_av_codec_config_req_t *)p_data;
+  btif_a2dp_source_encoder_user_config_update_req(req->codec_config, req->bd_addr);
 }
 
 static void btif_report_source_codec_state(UNUSED_ATTR void* p_data,
@@ -2130,13 +2131,20 @@ static void btif_av_handle_event(uint16_t event, char* p_param) {
       break;
 
     case BTIF_AV_SOURCE_CONFIG_REQ_EVT:
-      //if (btif_av_get_num_connected_devices() > 1) {
         BTIF_TRACE_DEBUG("BTIF_AV_SOURCE_CONFIG_REQ_EVT more than one device connected");
-        if (btif_av_stream_started_ready())
-          index = btif_av_get_latest_playing_device_idx();
-        else
-          index = btif_av_get_latest_device_idx_to_start();
-      //}
+        index = btif_max_av_clients;
+        if (!codec_bda.IsEmpty())
+          index = btif_av_idx_by_bdaddr(&codec_bda);
+
+        if (index == btif_max_av_clients)
+        {
+          if (btif_av_stream_started_ready())
+            index = btif_av_get_latest_playing_device_idx();
+          else
+            index = btif_av_get_latest_device_idx_to_start();
+        }
+        BTIF_TRACE_IMP("BTIF_AV_SOURCE_CONFIG_REQ_EVT on idx = %d", index);
+        codec_bda = {};
       break;
     case BTIF_AV_SOURCE_CONFIG_UPDATED_EVT:
       if (codec_config_update_enabled == false)
@@ -2444,9 +2452,6 @@ int btif_av_idx_by_bdaddr(RawAddress *bd_addr) {
   for (i = 0; i < btif_max_av_clients; i++)
     if (*bd_addr == btif_av_cb[i].peer_bda)
       return i;
-#ifndef BT_AV_SHO_FEATURE
-    return 0;
-#endif
   return i;
 }
 
@@ -3160,11 +3165,12 @@ static bt_status_t set_active_device(const RawAddress& bd_addr) {
                                (char *)&bd_addr, sizeof(RawAddress), NULL);
 }
 
-static bt_status_t codec_config_src(
+static bt_status_t codec_config_src(const RawAddress& bd_addr,
     std::vector<btav_a2dp_codec_config_t> codec_preferences) {
   BTIF_TRACE_EVENT("%s", __func__);
   CHECK_BTAV_INIT();
 
+  btif_av_codec_config_req_t codec_req;
   isDevUiReq = false;
   for (auto cp : codec_preferences) {
     BTIF_TRACE_DEBUG(
@@ -3237,34 +3243,21 @@ static bt_status_t codec_config_src(
             }
           }
 
-          if (!btif_av_allow_codec_config_change(cp.codec_type,cp.sample_rate)) {
-            int idx;
-            if (btif_av_stream_started_ready())
-              idx = btif_av_get_latest_playing_device_idx();
-            else
-              idx = btif_av_get_latest_device_idx_to_start();
-            std::string addrstr = btif_av_cb[idx].peer_bda.ToString();
-            const char* bt_addr = addrstr.c_str();
-            btif_transfer_context(btif_av_handle_event, BTIF_AV_SOURCE_CONFIG_UPDATED_EVT,
-                                  (char *)bt_addr,sizeof(RawAddress), NULL);
-            return BT_STATUS_SUCCESS;
-          }
-          else
-            codec_cfg_change = true;
+          codec_cfg_change = true;
         }
     isDevUiReq = true;
+    if (!codec_bda.IsEmpty())
+      BTIF_TRACE_DEBUG("%s: previous codec_bda: %s", __func__, codec_bda.ToString().c_str());
+
+    codec_bda = bd_addr;
+    BTIF_TRACE_DEBUG("%s: current codec_bda: %s", __func__, codec_bda.ToString().c_str());
+    memcpy(&codec_req.bd_addr, (uint8_t *)&bd_addr, sizeof(RawAddress));
+    memcpy(&codec_req.codec_config, (char*)(&cp), sizeof(btav_a2dp_codec_config_t));
     btif_transfer_context(btif_av_handle_event, BTIF_AV_SOURCE_CONFIG_REQ_EVT,
-                          reinterpret_cast<char*>(&cp), sizeof(cp), NULL);
+                            (char *)&codec_req, sizeof(codec_req), NULL);
   }
 
   return BT_STATUS_SUCCESS;
-}
-
-// gghai: for JNI HAL compatibility
-static bt_status_t codec_config_src(
-    const RawAddress& bd_addr,
-    std::vector<btav_a2dp_codec_config_t> codec_preferences) {
-  return codec_config_src(codec_preferences);
 }
 
 
@@ -4416,24 +4409,6 @@ void btif_av_reset_reconfig_flag() {
   }
 }
 
-bool btif_av_allow_codec_config_change(btav_a2dp_codec_index_t codec_type,
-          btav_a2dp_codec_sample_rate_t sample_rate) {
-  BTIF_TRACE_DEBUG("%s",__func__);
-  /* Only 48khz sampling rate is supported in Split A2dp mode for other codecs, disregard
-   * codec switch request for sample rate change.
-   * LDAC Supports all sampling rates and switch request will be honored
-  */
-
-  if (codec_type == BTAV_A2DP_CODEC_INDEX_SOURCE_LDAC) {
-      return true;
-  }
-  if (sample_rate > 0 && sample_rate != BTAV_A2DP_CODEC_SAMPLE_RATE_48000) {
-      BTIF_TRACE_DEBUG("config not supported codec_type = %d, sample_rate = %d",
-                        codec_type, sample_rate)
-      return false; //Only 48k is supported in split mode
-  }
-  return true;
-}
 
 /******************************************************************************
 **

@@ -84,6 +84,7 @@
 #define MAX_2MBPS_AVDTP_MTU 663
 #define BTIF_A2DP_MAX_BITPOOL_MQ 35
 
+uint8_t last_sent_vsc_cmd = 0;
 extern bool enc_update_in_progress;
 extern bool tx_enc_update_initiated;
 extern tBTIF_A2DP_SOURCE_VSC btif_a2dp_src_vsc;
@@ -94,7 +95,7 @@ static void bta_av_st_rc_timer(tBTA_AV_SCB* p_scb,
 
 static void bta_av_vendor_offload_select_codec(tBTA_AV_SCB* p_scb);
 
-static uint8_t bta_av_vendor_offload_convert_sample_rate(uint16_t sample_rate);
+//static uint8_t bta_av_vendor_offload_convert_sample_rate(uint16_t sample_rate);
 
 /* state machine states */
 enum {
@@ -996,20 +997,8 @@ void bta_av_role_res(tBTA_AV_SCB* p_scb, tBTA_AV_DATA* p_data) {
  *
  ******************************************************************************/
 void bta_av_delay_rpt(tBTA_AV_SCB* p_scb, tBTA_AV_DATA* p_data) {
-  //tBTA_AV_DELAY_RPT delay_rpt;
-
+  APPL_TRACE_DEBUG("%s: delay report value: %d", __func__, p_data->str_msg.msg.delay_rpt_cmd.delay);
   p_scb->p_cos->delay(p_scb->hndl, p_data->str_msg.msg.delay_rpt_cmd.delay);
-/*  delay_rpt.bd_addr = p_data->str_msg.bd_addr;
-  delay_rpt.hndl = p_scb->hndl; 
-*/
-  /* Sink report delay value in 1/10 milliseconds, BTA layer report delay value
-   * in milliseconds to upper layer */
-/*  delay_rpt.sink_delay = (p_data->str_msg.msg.delay_rpt_cmd.delay) / 10;
-
-  APPL_TRACE_DEBUG("%s: delay report value: %d, handle: %d", __func__,
-                                      delay_rpt.sink_delay, delay_rpt.hndl);
-  (*bta_av_cb.p_cback)(BTA_AV_DELAY_REPORT_EVT, (tBTA_AV *) &delay_rpt);
-*/
 }
 
 /*******************************************************************************
@@ -1185,6 +1174,7 @@ void bta_av_cleanup(tBTA_AV_SCB* p_scb, UNUSED_ATTR tBTA_AV_DATA* p_data) {
   uint8_t role = BTA_AV_ROLE_AD_INT;
 
   APPL_TRACE_DEBUG("%s", __func__);
+  last_sent_vsc_cmd = 0;
 
   /* free any buffers */
   osi_free_and_reset((void**)&p_scb->p_cap);
@@ -1509,6 +1499,7 @@ void bta_av_str_opened(tBTA_AV_SCB* p_scb, tBTA_AV_DATA* p_data) {
   uint16_t mtu;
   uint8_t cur_role;
 
+  last_sent_vsc_cmd = 0;
   msg.hdr.layer_specific = p_scb->hndl;
   msg.is_up = true;
   msg.peer_addr = p_scb->peer_addr;
@@ -1662,6 +1653,7 @@ void bta_av_security_cfm(tBTA_AV_SCB* p_scb, tBTA_AV_DATA* p_data) {
 void bta_av_do_close(tBTA_AV_SCB* p_scb, UNUSED_ATTR tBTA_AV_DATA* p_data) {
   APPL_TRACE_DEBUG("%s: p_scb->co_started=%d", __func__, p_scb->co_started);
 
+  last_sent_vsc_cmd = 0;
   /* stop stream if started */
   if (p_scb->co_started) {
     bta_av_str_stopped(p_scb, NULL);
@@ -3420,6 +3412,7 @@ void offload_vendor_callback(tBTM_VSC_CMPL *param)
         {
           uint8_t param[2];
           APPL_TRACE_DEBUG("VS_QHCI_WRITE_A2DP_MEDIA_CHANNEL_CFG successful");
+          APPL_TRACE_DEBUG("%s: Last cached VSC command: 0x0%x", __func__, last_sent_vsc_cmd);
           if (!btif_a2dp_src_vsc.vs_configs_exchanged &&
               btif_a2dp_src_vsc.tx_start_initiated)
             btif_a2dp_src_vsc.vs_configs_exchanged = TRUE;
@@ -3433,6 +3426,13 @@ void offload_vendor_callback(tBTM_VSC_CMPL *param)
           param[0] = VS_QHCI_A2DP_WRITE_SCMS_T_CP;
           param[1] = offload_start.cp_flag;
 #else
+          if (last_sent_vsc_cmd == VS_QHCI_START_A2DP_MEDIA) {
+            APPL_TRACE_DEBUG("%s: START VSC already exchanged.", __func__);
+            status = 0;
+            (*bta_av_cb.p_cback)(BTA_AV_OFFLOAD_START_RSP_EVT, (tBTA_AV*)&status);
+            return;
+          }
+          last_sent_vsc_cmd = VS_QHCI_START_A2DP_MEDIA;
           param[0] = VS_QHCI_START_A2DP_MEDIA;
           param[1] = 0;
 #endif
@@ -3444,6 +3444,7 @@ void offload_vendor_callback(tBTM_VSC_CMPL *param)
         {
           uint8_t param[2];
           APPL_TRACE_DEBUG("VS_QHCI_A2DP_WRITE_SCMS_T_CP successful");
+          APPL_TRACE_DEBUG("%s: Last cached VSC command: 0x0%x", __func__, last_sent_vsc_cmd);
           if (!btif_a2dp_src_vsc.vs_configs_exchanged &&
               btif_a2dp_src_vsc.tx_start_initiated)
             btif_a2dp_src_vsc.vs_configs_exchanged = TRUE;
@@ -3453,6 +3454,13 @@ void offload_vendor_callback(tBTM_VSC_CMPL *param)
             (*bta_av_cb.p_cback)(BTA_AV_OFFLOAD_START_RSP_EVT, (tBTA_AV*)&status);
             break;
           }
+          if (last_sent_vsc_cmd == VS_QHCI_START_A2DP_MEDIA) {
+            APPL_TRACE_DEBUG("%s: START VSC already exchanged.", __func__);
+            status = 0;
+            (*bta_av_cb.p_cback)(BTA_AV_OFFLOAD_START_RSP_EVT, (tBTA_AV*)&status);
+            return;
+          }
+          last_sent_vsc_cmd = VS_QHCI_START_A2DP_MEDIA;
           param[0] = VS_QHCI_START_A2DP_MEDIA;
           param[1] = 0;
           BTM_VendorSpecificCommand(HCI_VSQC_CONTROLLER_A2DP_OPCODE,2,
@@ -3482,7 +3490,7 @@ void offload_vendor_callback(tBTM_VSC_CMPL *param)
   }
 }
 
-static uint8_t bta_av_vendor_offload_convert_sample_rate(uint16_t sample_rate) {
+/* static uint8_t bta_av_vendor_offload_convert_sample_rate(uint16_t sample_rate) {
   uint8_t rate;
   switch (sample_rate) {
     case 44100:
@@ -3497,7 +3505,7 @@ static uint8_t bta_av_vendor_offload_convert_sample_rate(uint16_t sample_rate) {
       break;
   }
   return rate;
-}
+} */
 
 static void bta_av_vendor_offload_select_codec(tBTA_AV_SCB* p_scb)
 {
@@ -3537,8 +3545,10 @@ void bta_av_vendor_offload_start(tBTA_AV_SCB* p_scb)
 {
   uint8_t param[40];// codec_type;//index = 0;
   unsigned char status = 0;
+  uint16_t bitrate = 0;
   //uint16_t sample_rate;
   APPL_TRACE_DEBUG("%s: enc_update_in_progress = %d", __func__, enc_update_in_progress);
+  APPL_TRACE_DEBUG("%s: Last cached VSC command: 0x0%x", __func__, last_sent_vsc_cmd);
   APPL_TRACE_IMP("bta_av_vendor_offload_start: vsc flags:-"
     "vs_configs_exchanged:%u tx_started:%u tx_start_initiated:%u"
     "tx_enc_update_initiated:%u", btif_a2dp_src_vsc.vs_configs_exchanged, btif_a2dp_src_vsc.tx_started,
@@ -3556,6 +3566,13 @@ void bta_av_vendor_offload_start(tBTA_AV_SCB* p_scb)
     if(btif_a2dp_src_vsc.vs_configs_exchanged) {
       param[0] = VS_QHCI_START_A2DP_MEDIA;
       param[1] = 0;
+      if (last_sent_vsc_cmd == VS_QHCI_START_A2DP_MEDIA) {
+        APPL_TRACE_DEBUG("%s: START VSC already exchanged.", __func__);
+        status = 0;
+        (*bta_av_cb.p_cback)(BTA_AV_OFFLOAD_START_RSP_EVT, (tBTA_AV*)&status);
+        return;
+      }
+      last_sent_vsc_cmd = VS_QHCI_START_A2DP_MEDIA;
       BTM_VendorSpecificCommand(HCI_VSQC_CONTROLLER_A2DP_OPCODE,2, param,
           offload_vendor_callback);
       return;
@@ -3570,9 +3587,12 @@ void bta_av_vendor_offload_start(tBTA_AV_SCB* p_scb)
   if(p_scb->do_scrambling) {
     uint8_t *p_param = param;
     *p_param++ = VS_QHCI_SCRAMBLE_A2DP_MEDIA;
-    UINT8_TO_STREAM(p_param,
-        bta_av_vendor_offload_convert_sample_rate(offload_start.sample_rate));
-
+    bitrate = A2DP_GetTrackBitRate(p_scb->cfg.codec_info);
+    if (bitrate == 0) {
+      UINT8_TO_STREAM(p_param, 1);
+    } else {
+      UINT8_TO_STREAM(p_param, 2);
+    }
     UINT16_TO_STREAM(p_param,offload_start.acl_hdl);
 
     BTM_VendorSpecificCommand(HCI_VSQC_CONTROLLER_A2DP_OPCODE,4, param,
@@ -3609,13 +3629,22 @@ void bta_av_vendor_offload_start(tBTA_AV_SCB* p_scb)
 void bta_av_vendor_offload_stop()
 {
   uint8_t param[2];
+  unsigned char status = 0;
   APPL_TRACE_DEBUG("bta_av_vendor_offload_stop, btif_a2dp_src_vsc.tx_started: %u,"
       "btif_a2dp_src_vsc.tx_stop_initiated: %u",
       btif_a2dp_src_vsc.tx_started, btif_a2dp_src_vsc.tx_stop_initiated);
+  APPL_TRACE_DEBUG("%s: Last cached VSC command: 0x0%x", __func__, last_sent_vsc_cmd);
   if (btif_a2dp_src_vsc.tx_started && !btif_a2dp_src_vsc.tx_stop_initiated) {
     btif_a2dp_src_vsc.tx_stop_initiated = TRUE;
     param[0] = VS_QHCI_STOP_A2DP_MEDIA;
     param[1] = 0;
+    if (last_sent_vsc_cmd == VS_QHCI_STOP_A2DP_MEDIA) {
+      APPL_TRACE_DEBUG("%s: STOP VSC already exchanged.", __func__);
+      status = 0;
+      (*bta_av_cb.p_cback)(BTA_AV_OFFLOAD_STOP_RSP_EVT, (tBTA_AV*)&status);
+      return;
+    }
+    last_sent_vsc_cmd = VS_QHCI_STOP_A2DP_MEDIA;
     BTM_VendorSpecificCommand(HCI_VSQC_CONTROLLER_A2DP_OPCODE, 2, param,
         offload_vendor_callback);
   } else if((btif_a2dp_src_vsc.tx_start_initiated || tx_enc_update_initiated)

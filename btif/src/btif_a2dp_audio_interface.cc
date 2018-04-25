@@ -610,8 +610,8 @@ void btif_a2dp_audio_send_connection_status()
 }
 void btif_a2dp_audio_send_sink_latency()
 {
-  LOG_INFO(LOG_TAG,"send_sink_latency");
   uint16_t sink_latency = btif_av_get_audio_delay();
+  LOG_INFO(LOG_TAG,"send_sink_latency = %d", sink_latency);
   if (btAudio != nullptr) {
     auto ret = btAudio->a2dp_on_get_sink_latency(sink_latency);
     if (!ret.isOk()) LOG_ERROR(LOG_TAG,"server died");
@@ -735,11 +735,8 @@ uint8_t btif_a2dp_audio_process_request(uint8_t cmd)
         {
           int samplerate = A2DP_GetTrackSampleRate(p_codec_info);
           if ((A2DP_VendorCodecGetVendorId(p_codec_info)) == A2DP_LDAC_VENDOR_ID) {
-            if ((samplerate == 44100) || (samplerate == 88200)) {
-              bitrate = DEFAULT_LDAC_BITRATE_441KHZ; /* Default bitrate for LDAC is 606BKBps for 44.1/88.2 KHz */
-            } else {
-              bitrate = DEFAULT_LDAC_BITRATE_48KHZ; /* Default bitrate for LDAC is 660KBps for 48/96KHz */
-            }
+            bitrate = A2DP_GetTrackBitRate(p_codec_info);
+            LOG_INFO(LOG_TAG,"bitrate = %d", bitrate);
           } else {
             /* BR = (Sampl_Rate * PCM_DEPTH * CHNL)/Compression_Ratio */
             int bits_per_sample = 16; // TODO
@@ -1051,11 +1048,8 @@ uint8_t btif_a2dp_audio_process_request(uint8_t cmd)
         {
           int samplerate = A2DP_GetTrackSampleRate(p_codec_info);
           if ((A2DP_VendorCodecGetVendorId(p_codec_info)) == A2DP_LDAC_VENDOR_ID) {
-            if ((samplerate == 44100) || (samplerate == 88200)) {
-              bitrate = DEFAULT_LDAC_BITRATE_441KHZ; /* Default bitrate for LDAC is 606BKBps for 44.1/88.2 KHz */
-            } else {
-              bitrate = DEFAULT_LDAC_BITRATE_48KHZ; /* Default bitrate for LDAC is 660KBps for 48/96KHz */
-            }
+            bitrate = A2DP_GetTrackBitRate(p_codec_info);
+            LOG_INFO(LOG_TAG,"bitrate = %d", bitrate);
           } else {
             /* BR = (Sampl_Rate * PCM_DEPTH * CHNL)/Compression_Ratio */
             int bits_per_sample = 16; // TODO

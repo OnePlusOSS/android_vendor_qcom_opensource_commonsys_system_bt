@@ -3027,7 +3027,7 @@ void btm_sec_rmt_name_request_complete(const RawAddress* p_bd_addr,
     p_dev_rec->process_existing_rnr = FALSE;
     if (status == HCI_SUCCESS) {
       strlcpy((char*)p_dev_rec->sec_bd_name, (char*)p_bd_name,
-              BTM_MAX_REM_BD_NAME_LEN);
+              BTM_MAX_REM_BD_NAME_LEN + 1);
       p_dev_rec->sec_flags |= BTM_SEC_NAME_KNOWN;
       BTM_TRACE_EVENT("setting BTM_SEC_NAME_KNOWN sec_flags:0x%x",
                       p_dev_rec->sec_flags);
@@ -3544,7 +3544,7 @@ void btm_proc_sp_req_evt(tBTM_SP_EVT event, uint8_t* p) {
     memcpy(evt_data.cfm_req.dev_class, p_dev_rec->dev_class, DEV_CLASS_LEN);
 
     strlcpy((char*)evt_data.cfm_req.bd_name, (char*)p_dev_rec->sec_bd_name,
-            BTM_MAX_REM_BD_NAME_LEN);
+            BTM_MAX_REM_BD_NAME_LEN + 1);
 
     switch (event) {
       case BTM_SP_CFM_REQ_EVT:
@@ -3783,7 +3783,7 @@ void btm_rem_oob_req(uint8_t* p) {
     evt_data.bd_addr = p_dev_rec->bd_addr;
     memcpy(evt_data.dev_class, p_dev_rec->dev_class, DEV_CLASS_LEN);
     strlcpy((char*)evt_data.bd_name, (char*)p_dev_rec->sec_bd_name,
-            BTM_MAX_REM_BD_NAME_LEN);
+            BTM_MAX_REM_BD_NAME_LEN + 1);
 
     btm_sec_change_pairing_state(BTM_PAIR_STATE_WAIT_LOCAL_OOB_RSP);
     if ((*btm_cb.api.p_sp_callback)(BTM_SP_RMT_OOB_EVT,
@@ -4172,14 +4172,10 @@ void btm_sec_encrypt_change(uint16_t handle, uint8_t status,
 
   if (p_acl && p_acl->transport == BT_TRANSPORT_LE) {
     if (status == HCI_ERR_AUTH_FAILURE ||
+        status == HCI_ERR_KEY_MISSING ||
         status == HCI_ERR_ENCRY_MODE_NOT_ACCEPTABLE) {
       p_dev_rec->sec_flags &= ~(BTM_SEC_LE_LINK_KEY_KNOWN);
       p_dev_rec->ble.key_type = BTM_LE_KEY_NONE;
-    } else if (status == HCI_ERR_KEY_MISSING) {
-      btm_sec_disconnect(handle, status);
-    }
-    else if (status == HCI_ERR_KEY_MISSING) {
-        btm_sec_disconnect(handle, status);
     }
     btm_ble_link_encrypted(p_dev_rec->ble.pseudo_addr, encr_enable);
     return;
