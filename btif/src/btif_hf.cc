@@ -876,6 +876,10 @@ bt_status_t HeadsetInterface::Init(Callbacks* callbacks, int max_hf_clients,
       << BTA_AG_MAX_NUM_CLIENTS << " was given " << max_hf_clients;
 
   btif_max_hf_clients = max_hf_clients;
+
+  // let bta also know about the max hf clients
+  BTA_AgSetMaxHfClients(max_hf_clients);
+
   BTIF_TRACE_DEBUG(
       "%s: btif_hf_features=%zu, max_hf_clients=%d, inband_ringing_enabled=%d",
       __func__, btif_hf_features, btif_max_hf_clients, inband_ringing_enabled);
@@ -1016,6 +1020,12 @@ bt_status_t HeadsetInterface::ConnectAudio(RawAddress* bd_addr) {
   if (!IsSlcConnected(bd_addr)) {
     LOG(ERROR) << ": SLC not connected for " << *bd_addr;
     return BT_STATUS_NOT_READY;
+  }
+
+  if (!is_active_device(*bd_addr)) {
+    LOG(ERROR) << "HF: ConnectAudio is called for inactive device, returning"
+               << *bd_addr;
+    return BT_STATUS_FAIL;
   }
 
   if (idx != BTIF_HF_INVALID_IDX) {

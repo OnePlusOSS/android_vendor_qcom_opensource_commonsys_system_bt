@@ -194,9 +194,7 @@ void bta_ag_start_open(tBTA_AG_SCB* p_scb, tBTA_AG_DATA* p_data) {
 
   /* Check if RFCOMM has any incoming connection to avoid collision. */
   if (PORT_IsOpening(pending_bd_addr)) {
-    char value[PROPERTY_VALUE_MAX];
-    if (property_get("persist.bt.max.hs.connections", value, "") &&
-                !strcmp(value, "2") )
+    if (bta_ag_cb.max_hf_clients > 1)
     {
       // Abort the outgoing connection if incoming connection is from the same device
       if (pending_bd_addr == p_scb->peer_addr)
@@ -556,10 +554,8 @@ void bta_ag_rfc_acp_open(tBTA_AG_SCB* p_scb, tBTA_AG_DATA* p_data) {
 
       VLOG(1) << __func__ << "ag_scb addr:" << ag_scb->peer_addr;
       if (dev_addr == ag_scb->peer_addr) {
-        char value[PROPERTY_VALUE_MAX];
         /* Read the property if multi hf is enabled */
-        if (property_get("persist.bt.max.hs.connections", value, "") &&
-                    !strcmp(value, "2") )
+        if (bta_ag_cb.max_hf_clients > 1)
         {
           /* If incoming and outgoing device are same, nothing more to do.*/
           /* Outgoing conn will be aborted because we have successful incoming conn.*/
@@ -653,6 +649,8 @@ void bta_ag_rfc_data(tBTA_AG_SCB* p_scb, UNUSED_ATTR tBTA_AG_DATA* p_data) {
 
     if (strstr(buf, "AT+IPHONEACCEV") != NULL) {
         APPL_TRACE_IMP("%s: AT+IPHONEACCEV received, not coming out of sniff", __func__);
+    } else if (strstr(buf, "AT+CHUP") != NULL) {
+        APPL_TRACE_IMP("%s: AT+CHUP received, not coming out of sniff", __func__);
     } else {
         APPL_TRACE_IMP("%s: setting sys busy", __func__);
         bta_sys_busy(BTA_ID_AG, p_scb->app_id, p_scb->peer_addr);
@@ -666,6 +664,8 @@ void bta_ag_rfc_data(tBTA_AG_SCB* p_scb, UNUSED_ATTR tBTA_AG_DATA* p_data) {
     } else {
       if (strstr(buf, "AT+IPHONEACCEV") != NULL) {
           APPL_TRACE_IMP("%s: AT+IPHONEACCEV received, not setting idle", __func__);
+      } else if (strstr(buf, "AT+CHUP") != NULL) {
+          APPL_TRACE_IMP("%s: AT+CHUP received, not setting idle", __func__);
       } else {
           APPL_TRACE_IMP("%s: resetting idle timer", __func__);
           bta_sys_idle(BTA_ID_AG, p_scb->app_id, p_scb->peer_addr);
