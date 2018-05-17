@@ -1847,10 +1847,10 @@ void btm_clear_all_pending_le_entry(void) {
   }
 }
 
-void btm_ble_process_adv_addr(RawAddress& bda, uint8_t addr_type) {
+void btm_ble_process_adv_addr(RawAddress& bda, uint8_t* addr_type) {
 #if (BLE_PRIVACY_SPT == TRUE)
   /* map address to security record */
-  bool match = btm_identity_addr_to_random_pseudo(&bda, &addr_type, false);
+  bool match = btm_identity_addr_to_random_pseudo(&bda, addr_type, false);
 
   VLOG(1) << __func__ << ": bda=" << bda;
   /* always do RRA resolution on host */
@@ -1915,13 +1915,20 @@ void btm_ble_process_ext_adv_pkt(uint8_t data_len, uint8_t* data) {
 
     uint8_t* pkt_data = p;
     p += pkt_data_len; /* Advance to the the next packet*/
-
-    if (rssi >= 21 && rssi <= 126) {
-      BTM_TRACE_ERROR("%s: bad rssi value in advertising report: ", __func__,
-                      pkt_data_len, rssi);
+    if (p > data + data_len) {
+      LOG(ERROR) << "Invalid pkt_data_len: " << +pkt_data_len;
+      return;
     }
 
-    btm_ble_process_adv_addr(bda, addr_type);
+    if (rssi >= 21 && rssi <= 126) {
+      BTM_TRACE_ERROR("%s: bad rssi value in advertising report: %d", __func__,
+                      rssi);
+    }
+
+    if (addr_type != BLE_ADDR_ANONYMOUS) {
+      btm_ble_process_adv_addr(bda, &addr_type);
+    }
+
     btm_ble_process_adv_pkt_cont(event_type, addr_type, bda, primary_phy,
                                  secondary_phy, advertising_sid, tx_power, rssi,
                                  periodic_adv_int, pkt_data_len, pkt_data);
@@ -1960,6 +1967,10 @@ void btm_ble_process_adv_pkt(uint8_t data_len, uint8_t* data) {
 
     uint8_t* pkt_data = p;
     p += pkt_data_len; /* Advance to the the rssi byte */
+    if (p > data + data_len - sizeof(rssi)) {
+      LOG(ERROR) << "Invalid pkt_data_len: " << +pkt_data_len;
+      return;
+    }
 
     STREAM_TO_INT8(rssi, p);
 
@@ -1968,7 +1979,7 @@ void btm_ble_process_adv_pkt(uint8_t data_len, uint8_t* data) {
                       pkt_data_len, rssi);
     }
 
-    btm_ble_process_adv_addr(bda, addr_type);
+    btm_ble_process_adv_addr(bda, &addr_type);
 
     uint16_t event_type;
     if (legacy_evt_type == 0x00) {  // ADV_IND;
@@ -2019,7 +2030,8 @@ static void btm_ble_process_adv_pkt_cont(
   bool is_start =
       ble_evt_type_is_legacy(evt_type) && is_scannable && !is_scan_resp;
 
-  if (is_start) AdvertiseDataParser::RemoveTrailingZeros(tmp);
+  if (ble_evt_type_is_legacy(evt_type))
+    AdvertiseDataParser::RemoveTrailingZeros(tmp);
 
   // We might have send scan request to this device before, but didn't get the
   // response. In such case make sure data is put at start, not appended to
