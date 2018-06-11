@@ -40,12 +40,14 @@
 #include "bta_sys.h"
 #include "btm_api.h"
 #include "btm_int.h"
+#include "device/include/controller.h"
 #include "gap_api.h"
 #include "l2c_api.h"
 #include "osi/include/allocator.h"
 #include "port_api.h"
 #include "rfcdefs.h"
 #include "sdp_api.h"
+#include "stack/l2cap/l2c_int.h"
 #include "utl.h"
 
 #include "osi/include/osi.h"
@@ -741,6 +743,10 @@ void bta_jv_get_channel_id(tBTA_JV_MSG* p_data) {
       }
       break;
     case BTA_JV_CONN_TYPE_L2CAP_LE:
+      psm = L2CA_AllocateLePSM();
+      if (psm == 0) {
+        LOG(ERROR) << __func__ << ": Error: No free LE PSM available";
+      }
       break;
     default:
       break;
@@ -779,7 +785,8 @@ void bta_jv_free_scn(tBTA_JV_MSG* p_data) {
       bta_jv_set_free_psm(scn);
       break;
     case BTA_JV_CONN_TYPE_L2CAP_LE:
-      // TODO: Not yet implemented...
+      VLOG(2) << __func__ << ": type=BTA_JV_CONN_TYPE_L2CAP_LE. psm=" << scn;
+      L2CA_FreeLePSM(scn);
       break;
     default:
       break;
@@ -938,7 +945,8 @@ void bta_jv_delete_record(tBTA_JV_MSG* p_data) {
  * Returns      void
  *
  ******************************************************************************/
-static void bta_jv_l2cap_client_cback(uint16_t gap_handle, uint16_t event) {
+static void bta_jv_l2cap_client_cback(uint16_t gap_handle, uint16_t event,
+                                      tGAP_CB_DATA* data) {
   tBTA_JV_L2C_CB* p_cb = &bta_jv_cb.l2c_cb[gap_handle];
   tBTA_JV evt_data;
 
@@ -1048,8 +1056,9 @@ void bta_jv_l2cap_connect(tBTA_JV_MSG* p_data) {
     if ((cc->type != BTA_JV_CONN_TYPE_L2CAP) ||
         (bta_jv_check_psm(cc->remote_psm))) /* allowed */
     {
+      uint16_t max_mps = controller_get_interface()->get_acl_data_size_ble();
       handle = GAP_ConnOpen("", sec_id, 0, &cc->peer_bd_addr, cc->remote_psm,
-                            &cfg, ertm_info, cc->sec_mask, chan_mode_mask,
+                            max_mps,&cfg, ertm_info, cc->sec_mask, chan_mode_mask,
                             bta_jv_l2cap_client_cback, cc->type);
       if (handle != GAP_INVALID_HANDLE) {
         evt_data.status = BTA_JV_SUCCESS;
@@ -1112,7 +1121,8 @@ void bta_jv_l2cap_close(tBTA_JV_MSG* p_data) {
  * Returns          void
  *
  ******************************************************************************/
-static void bta_jv_l2cap_server_cback(uint16_t gap_handle, uint16_t event) {
+static void bta_jv_l2cap_server_cback(uint16_t gap_handle, uint16_t event,
+                                      tGAP_CB_DATA* data) {
   tBTA_JV_L2C_CB* p_cb = &bta_jv_cb.l2c_cb[gap_handle];
   tBTA_JV evt_data;
   tBTA_JV_L2CAP_CBACK* p_cback;
@@ -1218,11 +1228,12 @@ void bta_jv_l2cap_start_server(tBTA_JV_MSG* p_data) {
   */
 
   sec_id = bta_jv_alloc_sec_id();
+  uint16_t max_mps = controller_get_interface()->get_acl_data_size_ble();
   /* PSM checking is not required for LE COC */
   if (0 == sec_id || ((ls->type == BTA_JV_CONN_TYPE_L2CAP) &&
                       (false == bta_jv_check_psm(ls->local_psm))) ||
       (handle = GAP_ConnOpen("JV L2CAP", sec_id, 1, nullptr, ls->local_psm,
-                             &cfg, ertm_info, ls->sec_mask, chan_mode_mask,
+                             max_mps, &cfg, ertm_info, ls->sec_mask, chan_mode_mask,
                              bta_jv_l2cap_server_cback, ls->type)) ==
           GAP_INVALID_HANDLE) {
     bta_jv_free_sec_id(&sec_id);

@@ -190,9 +190,7 @@ static void delete_btsnoop_files() {
 static bool is_btsnoop_enabled() {
   char btsnoop_enabled[PROPERTY_VALUE_MAX] = {0};
   osi_property_get(BTSNOOP_ENABLE_PROPERTY, btsnoop_enabled, "false");
-  bool ret = strncmp(btsnoop_enabled, "true", 4) == 0;
-  LOG_ERROR(LOG_TAG, "%s is_btsnoop_enabled = %d", __func__, ret);
-  return true;
+  return strncmp(btsnoop_enabled, "true", 4) == 0;
 }
 
 static char* get_btsnoop_log_path(char* btsnoop_path) {
@@ -303,6 +301,8 @@ static void btsnoop_write_packet(packet_type_t type, uint8_t* packet,
   uint32_t length_he = 0;
   uint32_t flags = 0;
 
+  LOG_DEBUG(LOG_TAG, "%s: -->", __func__);
+
   switch (type) {
     case kCommandPacket:
       length_he = packet[2] + 4;
@@ -336,6 +336,8 @@ static void btsnoop_write_packet(packet_type_t type, uint8_t* packet,
   btsnoop_net_write(&header, sizeof(btsnoop_header_t));
   btsnoop_net_write(packet, length_he - 1);
 
+  LOG_DEBUG(LOG_TAG, "%s: finished net_write", __func__);
+
   if (logfile_fd != INVALID_FD) {
     packet_counter++;
     if (!sock_snoop_active && packet_counter > packets_per_file) {
@@ -346,6 +348,8 @@ static void btsnoop_write_packet(packet_type_t type, uint8_t* packet,
                    {reinterpret_cast<void*>(packet), length_he - 1}};
     TEMP_FAILURE_RETRY(writev(logfile_fd, iov, 2));
   }
+
+  LOG_DEBUG(LOG_TAG, "%s: <--", __func__);
 }
 
 void update_snoop_fd(int snoop_fd) {

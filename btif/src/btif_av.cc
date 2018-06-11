@@ -80,6 +80,7 @@
 #include "device/include/interop.h"
 #include "device/include/controller.h"
 #include "btif_bat.h"
+#include "bta/av/bta_av_int.h"
 
 extern bool isDevUiReq;
 bool isBitRateChange = false;
@@ -1647,9 +1648,14 @@ static bool btif_av_state_opened_handler(btif_sm_event_t event, void* p_data,
     } break;
 
     case BTA_AV_OFFLOAD_START_RSP_EVT:
-      APPL_TRACE_WARNING("Offload Start Rsp is unsupported in opened state");
-      if (btif_av_cb[index].flags & BTIF_AV_FLAG_REMOTE_SUSPEND)
+      APPL_TRACE_WARNING("Offload Start Rsp is unsupported in opened state, status = %d", p_av->status);
+      if (btif_av_cb[index].flags & BTIF_AV_FLAG_REMOTE_SUSPEND) {
+        if (p_av->status == BTA_AV_SUCCESS) {
+          btif_a2dp_src_vsc.tx_started = TRUE;
+          bta_av_vendor_offload_stop(NULL);
+        }
         btif_a2dp_on_offload_started(BTA_AV_FAIL_UNSUPPORTED);
+      }
       break;
 
     case BTA_AV_RC_OPEN_EVT: {
@@ -2063,6 +2069,16 @@ static bool btif_av_state_started_handler(btif_sm_event_t event, void* p_data,
       remote_start_cancelled = false;
       // if not successful, remain in current state
       if (p_av->suspend.status != BTA_AV_SUCCESS) {
+        if (btif_av_cb[index].is_suspend_for_remote_start) {
+          BTIF_TRACE_DEBUG("Suspend sent for remote start failed");
+          btif_av_cb[index].is_suspend_for_remote_start = false;
+          if (!btif_av_is_playing_on_other_idx(index) &&
+                  (index == btif_av_get_latest_device_idx_to_start())) {
+            BTIF_TRACE_DEBUG("other index not playing, setup codec");
+            btif_dispatch_sm_event(BTIF_AV_SETUP_CODEC_REQ_EVT, NULL, 0);
+          }
+        }
+
         btif_av_cb[index].flags &= ~BTIF_AV_FLAG_LOCAL_SUSPEND_PENDING;
 
         if (btif_av_cb[index].peer_sep == AVDT_TSEP_SNK)
@@ -2194,6 +2210,7 @@ static void btif_av_handle_event(uint16_t event, char* p_param) {
   RawAddress *bt_addr = nullptr;
   uint8_t role;
   int uuid;
+  bool active_device_selected = false;
 
   switch (event) {
     case BTIF_AV_INIT_REQ_EVT:
@@ -2270,7 +2287,40 @@ static void btif_av_handle_event(uint16_t event, char* p_param) {
 
     case BTIF_AV_TRIGGER_HANDOFF_REQ_EVT:
       bt_addr = (RawAddress *)p_param;
+      BTIF_TRACE_WARNING("%s: device %s ",__func__, (*bt_addr).ToString().c_str());
+
+      /* 1. SetActive Device -> Null */
+      if (*bt_addr == RawAddress::kEmpty)
+      {
+        for(int i = 0; i < btif_max_av_clients; i++)
+        {
+          if (btif_av_cb[i].current_playing == TRUE)
+            btif_av_cb[i].current_playing = FALSE;
+        }
+        BTIF_TRACE_IMP("Reset all Current Playing for Device -> Null");
+        break;
+      }
+
+      /* 2. SetActive Null -> Device */
+      for(int i = 0; i < btif_max_av_clients; i++)
+        if (btif_av_cb[i].current_playing == TRUE)
+          active_device_selected = true;
+
       index = btif_av_idx_by_bdaddr(bt_addr);
+      if (active_device_selected == false)
+      {
+        BTIF_TRACE_IMP("For Null -> Device set current playing and don't trigger handoff");
+        btif_av_cb[index].current_playing = TRUE;
+        break;
+      }
+
+      /* 3. SetActive Device -> Device */
+      if (btif_av_cb[index].current_playing == TRUE)
+      {
+        BTIF_TRACE_IMP("Trigger handoff for same device %d discard it", index);
+        break;
+      }
+
       BTIF_TRACE_IMP("BTIF_AV_TRIGGER_HANDOFF_REQ_EVT on index %d", index);
 #if (TWS_ENABLED == TRUE)
       if (btif_av_cb[index].tws_device ||
@@ -2285,7 +2335,7 @@ static void btif_av_handle_event(uint16_t event, char* p_param) {
 #endif
       if (index >= 0 && index < btif_max_av_clients)
       {
-        for(int i = 0; i< btif_max_av_clients; i++)
+        for(int i = 0; i < btif_max_av_clients; i++)
         {
           if (i == index)
             btif_av_cb[i].current_playing = TRUE;
@@ -3324,6 +3374,7 @@ static bt_status_t codec_config_src(const RawAddress& bd_addr,
             isBitRateChange = false;
             if ((codec_config.codec_specific_1 != cp.codec_specific_1) &&
                 (codec_config.codec_type == BTAV_A2DP_CODEC_INDEX_SOURCE_LDAC)) {
+              isBitRateChange = true;
               switch (cp.codec_specific_1)
               {
               case 1000:
@@ -3351,9 +3402,8 @@ static bt_status_t codec_config_src(const RawAddress& bd_addr,
                 reconfig_a2dp_param_val = 0;
                 break;
               }
-              if (codec_config.codec_specific_1 != 0) {
+              if (cp.codec_specific_1 != 0) {
                 reconfig_a2dp_param_id = BITRATE_PARAM_ID;
-                isBitRateChange = true;
               }
             }
           }
@@ -3731,8 +3781,8 @@ bt_status_t btif_av_execute_service(bool b_enable) {
   tBTA_AV_FEAT feat_delay_rpt = 0;
   BTIF_TRACE_DEBUG("%s(): enable: %d", __func__, b_enable);
   if (b_enable) {
-    osi_property_get("persist.bluetooth.enabledelayreports", value, "true");
-    delay_report_enabled = (strcmp(value, "true") == 0);
+    osi_property_get("persist.bluetooth.disabledelayreports", value, "false");
+    delay_report_enabled = (strcmp(value, "false") == 0);
     if (delay_report_enabled)
       feat_delay_rpt = BTA_AV_FEAT_DELAY_RPT;
 

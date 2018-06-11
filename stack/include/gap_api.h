@@ -78,6 +78,7 @@
 #define GAP_EVT_CONN_UNCONGESTED 0x0104
 #define GAP_EVT_TX_EMPTY 0x0105
 #define GAP_EVT_TX_DONE             0x0106
+#define GAP_EVT_LE_COC_CREDITS 0x0107
 
 /* Values for 'chan_mode_mask' field */
 /* GAP_ConnOpen() - optional channels to negotiate */
@@ -106,13 +107,24 @@
 #define GAP_PREFER_CONN_SP_TOUT 2000
 #endif
 
+struct tGAP_COC_CREDITS {
+  uint16_t gap_handle;
+  uint16_t credits_received;
+  uint16_t credit_count;
+};
+
+union tGAP_CB_DATA {
+  tGAP_COC_CREDITS coc_credits;
+};
+
 /*****************************************************************************
  *  Type Definitions
  ****************************************************************************/
 /*
  * Callback function for connection services
 */
-typedef void(tGAP_CONN_CALLBACK)(uint16_t gap_handle, uint16_t event);
+typedef void(tGAP_CONN_CALLBACK)(uint16_t gap_handle, uint16_t event,
+                                 tGAP_CB_DATA* data);
 
 /*
  * Define the callback function prototypes.  Parameters are specific
@@ -164,7 +176,8 @@ typedef void(tGAP_BLE_CMPL_CBACK)(bool status, const RawAddress& addr,
  ******************************************************************************/
 extern uint16_t GAP_ConnOpen(const char* p_serv_name, uint8_t service_id,
                              bool is_server, const RawAddress* p_rem_bda,
-                             uint16_t psm, tL2CAP_CFG_INFO* p_cfg,
+                             uint16_t psm, uint16_t le_mps,
+                             tL2CAP_CFG_INFO* p_cfg,
                              tL2CAP_ERTM_INFO* ertm_info, uint16_t security,
                              uint8_t chan_mode_mask, tGAP_CONN_CALLBACK* p_cb,
                              tBT_TRANSPORT transport);
