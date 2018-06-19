@@ -81,6 +81,9 @@ IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "btif_tws_plus.h"
 #include "btif_twsp_hf.h"
 #endif
+#ifdef BT_IOT_LOGGING_ENABLED
+#include "btif_iot_config.h"
+#endif
 
 namespace bluetooth {
 namespace headset {
@@ -338,7 +341,9 @@ static void send_bvra_update(int index)
 static int btif_hf_idx_by_bdaddr(RawAddress* bd_addr) {
   int i;
   for (i = 0; i < btif_max_hf_clients; ++i) {
-    if (is_connected(bd_addr) && (*bd_addr == btif_hf_cb[i].connected_bda))
+    if ( (btif_hf_cb[i].state == BTHF_CONNECTION_STATE_CONNECTED ||
+          btif_hf_cb[i].state == BTHF_CONNECTION_STATE_SLC_CONNECTED) &&
+         (*bd_addr == btif_hf_cb[i].connected_bda))
       return i;
   }
   return BTIF_HF_INVALID_IDX;
@@ -515,6 +520,12 @@ static void btif_hf_upstreams_evt(uint16_t event, char* p_param) {
                          __func__, p_data->open.status, btif_hf_cb[idx].state, btif_max_hf_clients);
       if (p_data->open.status == BTA_AG_SUCCESS) {
         btif_hf_cb[idx].connected_bda = p_data->open.bd_addr;
+#ifdef BT_IOT_LOGGING_ENABLED
+        if (btif_hf_cb[idx].state != BTHF_CONNECTION_STATE_CONNECTING) {
+          btif_iot_config_addr_set_int(btif_hf_cb[idx].connected_bda, IOT_CONF_KEY_HFP_ROLE, IOT_CONF_VAL_HFP_ROLE_CLIENT);
+          btif_iot_config_addr_int_add_one(btif_hf_cb[idx].connected_bda, IOT_CONF_KEY_HFP_SLC_CONN_COUNT);
+        }
+#endif
         btif_hf_cb[idx].state = BTHF_CONNECTION_STATE_CONNECTED;
         btif_hf_cb[idx].peer_feat = 0;
         clear_phone_state_multihf(idx);
@@ -530,16 +541,23 @@ static void btif_hf_upstreams_evt(uint16_t event, char* p_param) {
                         __func__, btif_hf_cb[idx].connected_bda.ToString().c_str());
           ignore_rfc_fail = true;
         }
+
+#ifdef BT_IOT_LOGGING_ENABLED
+        if (!ignore_rfc_fail) {
+          btif_iot_config_addr_int_add_one(btif_hf_cb[idx].connected_bda,
+              IOT_CONF_KEY_HFP_SLC_CONN_FAIL_COUNT);
+        }
+#endif
         LOG(ERROR) << __func__ << ": AG open failed for "
                    << btif_hf_cb[idx].connected_bda << ", status "
                    << unsigned(p_data->open.status);
         btif_hf_cb[idx].state = BTHF_CONNECTION_STATE_DISCONNECTED;
       } else {
-        BTIF_TRACE_WARNING(
-            "%s: AG open failed, but another device connected. status=%d "
-            "state=%d connected device=%s",
-            __func__, p_data->open.status, btif_hf_cb[idx].state,
-            btif_hf_cb[idx].connected_bda.ToString().c_str());
+        LOG(WARNING) << __func__ << ": AG open failed for "
+                     << p_data->open.bd_addr << ", error "
+                     << std::to_string(p_data->open.status)
+                     << ", local device is " << btif_hf_cb[idx].connected_bda
+                     << ". Ignoring as not expecting to open";
         break;
       }
       if (ignore_rfc_fail != true)
@@ -573,9 +591,17 @@ static void btif_hf_upstreams_evt(uint16_t event, char* p_param) {
       break;
 
     case BTA_AG_CLOSE_EVT:
+#ifdef BT_IOT_LOGGING_ENABLED
+      if (btif_hf_cb[idx].state == BTHF_CONNECTION_STATE_CONNECTED) {
+        btif_iot_config_addr_int_add_one(btif_hf_cb[idx].connected_bda,
+            IOT_CONF_KEY_HFP_SLC_CONN_FAIL_COUNT);
+      }
+#endif
+
       btif_hf_cb[idx].state = BTHF_CONNECTION_STATE_DISCONNECTED;
 
-      BTIF_TRACE_DEBUG("%s: Moving the audio_state to DISCONNECTED", __FUNCTION__);
+      BTIF_TRACE_DEBUG("%s: Moving the audio_state to DISCONNECTED for device %s",
+                       __FUNCTION__, btif_hf_cb[idx].connected_bda.ToString().c_str());
       btif_hf_cb[idx].audio_state = BTHF_AUDIO_STATE_DISCONNECTED;
       BTIF_TRACE_DEBUG(
           "%s: BTA_AG_CLOSE_EVT,"
@@ -620,6 +646,15 @@ static void btif_hf_upstreams_evt(uint16_t event, char* p_param) {
 
     case BTA_AG_CONN_EVT:
       BTIF_TRACE_DEBUG("%s: BTA_AG_CONN_EVT, idx = %d ", __func__, idx);
+
+#ifdef BT_IOT_LOGGING_ENABLED
+      btif_iot_config_addr_set_hex(btif_hf_cb[idx].connected_bda, IOT_CONF_KEY_HFP_CODECTYPE,
+          p_data->conn.peer_codec == 0x03 ? IOT_CONF_VAL_HFP_CODECTYPE_CVSDMSBC :
+          IOT_CONF_VAL_HFP_CODECTYPE_CVSD, 1);
+      btif_iot_config_addr_set_hex(btif_hf_cb[idx].connected_bda, IOT_CONF_KEY_HFP_FEATURES,
+          p_data->conn.peer_feat, 2);
+#endif
+
       btif_hf_cb[idx].peer_feat = p_data->conn.peer_feat;
       btif_hf_cb[idx].state = BTHF_CONNECTION_STATE_SLC_CONNECTED;
 
@@ -629,14 +664,22 @@ static void btif_hf_upstreams_evt(uint16_t event, char* p_param) {
       break;
 
     case BTA_AG_AUDIO_OPEN_EVT:
-      BTIF_TRACE_DEBUG("%s: Moving the audio_state to CONNECTED", __FUNCTION__);
+      BTIF_TRACE_DEBUG("%s: Moving the audio_state to CONNECTED for device %s",
+                      __FUNCTION__, btif_hf_cb[idx].connected_bda.ToString().c_str());
       btif_hf_cb[idx].audio_state = BTHF_AUDIO_STATE_CONNECTED;
       HAL_HF_CBACK(bt_hf_callbacks, AudioStateCallback, BTHF_AUDIO_STATE_CONNECTED,
                 &btif_hf_cb[idx].connected_bda);
       break;
 
     case BTA_AG_AUDIO_CLOSE_EVT:
-      BTIF_TRACE_DEBUG("%s: Moving the audio_state to DISCONNECTED", __FUNCTION__);
+      BTIF_TRACE_DEBUG("%s: Moving the audio_state to DISCONNECTED for device %s",
+                       __FUNCTION__, btif_hf_cb[idx].connected_bda.ToString().c_str());
+#ifdef BT_IOT_LOGGING_ENABLED
+      if (btif_hf_cb[idx].audio_state != BTHF_AUDIO_STATE_CONNECTED) {
+        btif_iot_config_addr_int_add_one(btif_hf_cb[idx].connected_bda,
+            IOT_CONF_KEY_HFP_SCO_CONN_FAIL_COUNT);
+      }
+#endif
       btif_hf_cb[idx].audio_state = BTHF_AUDIO_STATE_DISCONNECTED;
       HAL_HF_CBACK(bt_hf_callbacks, AudioStateCallback, BTHF_AUDIO_STATE_DISCONNECTED,
                 &btif_hf_cb[idx].connected_bda);
@@ -866,7 +909,8 @@ static void btif_in_hf_generic_evt(uint16_t event, char* p_param) {
 
   switch (event) {
     case BTIF_HFP_CB_AUDIO_CONNECTING: {
-      BTIF_TRACE_DEBUG("%s: Moving the audio_state to CONNECTING", __FUNCTION__);
+      BTIF_TRACE_DEBUG("%s: Moving the audio_state to CONNECTING for device %s",
+                __FUNCTION__, btif_hf_cb[idx].connected_bda.ToString().c_str());
       btif_hf_cb[idx].audio_state = BTHF_AUDIO_STATE_CONNECTING;
       HAL_HF_CBACK(bt_hf_callbacks, AudioStateCallback, BTHF_AUDIO_STATE_CONNECTING,
               &btif_hf_cb[idx].connected_bda);
@@ -1022,6 +1066,12 @@ static bt_status_t connect_int(RawAddress* bd_addr, uint16_t uuid) {
 
   BTA_AgOpen(btif_hf_cb[i].handle, btif_hf_cb[i].connected_bda,
                BTIF_HF_SECURITY, BTIF_HF_SERVICES);
+
+#ifdef BT_IOT_LOGGING_ENABLED
+  btif_iot_config_addr_set_int(btif_hf_cb[i].connected_bda, IOT_CONF_KEY_HFP_ROLE,
+      IOT_CONF_VAL_HFP_ROLE_CLIENT);
+    btif_iot_config_addr_int_add_one(btif_hf_cb[i].connected_bda, IOT_CONF_KEY_HFP_SLC_CONN_COUNT);
+#endif
   return BT_STATUS_SUCCESS;
 }
 
@@ -1117,6 +1167,11 @@ bt_status_t HeadsetInterface::ConnectAudio(RawAddress* bd_addr) {
 
   if (idx != BTIF_HF_INVALID_IDX) {
     BTA_AgAudioOpen(btif_hf_cb[idx].handle);
+
+#ifdef BT_IOT_LOGGING_ENABLED
+    if (btif_hf_cb[idx].audio_state != BTHF_AUDIO_STATE_CONNECTING)
+      btif_iot_config_addr_int_add_one(*bd_addr, IOT_CONF_KEY_HFP_SCO_CONN_COUNT);
+#endif
 
     /* Inform the application that the audio connection has been initiated
      * successfully */
@@ -1569,6 +1624,10 @@ bt_status_t HeadsetInterface::PhoneStateChange(
                        bd_addr->ToString().c_str());
     return BT_STATUS_FAIL;
   }
+#ifdef BT_IOT_LOGGING_ENABLED
+  bthf_audio_state_t current_audio_state;
+  current_audio_state = btif_hf_cb[idx].audio_state;
+#endif
 #if (TWS_AG_ENABLED == TRUE)
   if (is_twsp_device_connected()) {
       idx = get_idx_primary_eb(&btif_hf_cb[idx].connected_bda);
@@ -1645,9 +1704,17 @@ bt_status_t HeadsetInterface::PhoneStateChange(
 
     memset(&ag_res, 0, sizeof(tBTA_AG_RES_DATA));
     if (is_active_device(*bd_addr)) {
-       ag_res.audio_handle = control_block.handle;
-       BTIF_TRACE_DEBUG("%s: Moving the audio_state to CONNECTING", __FUNCTION__);
-       btif_hf_cb[idx].audio_state = BTHF_AUDIO_STATE_CONNECTING;
+       // initiate SCO only if it is not connected already
+       if (btif_hf_cb[idx].audio_state != BTHF_AUDIO_STATE_CONNECTED) {
+           ag_res.audio_handle = control_block.handle;
+           BTIF_TRACE_DEBUG("%s: Moving the audio_state to CONNECTING for device %s",
+                  __FUNCTION__, bd_addr->ToString().c_str());
+           btif_hf_cb[idx].audio_state = BTHF_AUDIO_STATE_CONNECTING;
+       } else {
+           BTIF_TRACE_IMP("%s: SCO is already connected with device %s, not intiating SCO",
+            __func__, bd_addr->ToString().c_str());
+           ag_res.audio_handle = BTA_AG_HANDLE_SCO_NO_CHANGE;
+       }
     } else {
        ag_res.audio_handle = BTA_AG_HANDLE_SCO_NO_CHANGE;
        BTIF_TRACE_IMP("%s: Don't create SCO since non-active device is connected",
@@ -1682,8 +1749,8 @@ bt_status_t HeadsetInterface::PhoneStateChange(
               res = BTA_AG_IN_CALL_CONN_RES;
               if (is_active_device(*bd_addr)) {
                 ag_res.audio_handle = control_block.handle;
-                BTIF_TRACE_DEBUG("%s: Moving the audio_state to CONNECTING",
-                      __FUNCTION__);
+                BTIF_TRACE_DEBUG("%s: Moving the audio_state to CONNECTING for device %s",
+                      __FUNCTION__, bd_addr->ToString().c_str());
                 control_block.audio_state = BTHF_AUDIO_STATE_CONNECTING;
               }
             } else if (num_held > control_block.num_held)
@@ -1730,7 +1797,8 @@ bt_status_t HeadsetInterface::PhoneStateChange(
         {
           ag_res.audio_handle = control_block.handle;
 
-          BTIF_TRACE_DEBUG("%s: Moving the audio_state to CONNECTING", __FUNCTION__);
+          BTIF_TRACE_DEBUG("%s: Moving the audio_state to CONNECTING for device %s",
+                     __FUNCTION__, bd_addr->ToString().c_str());
           control_block.audio_state = BTHF_AUDIO_STATE_CONNECTING;
         }
         else
@@ -1746,7 +1814,8 @@ bt_status_t HeadsetInterface::PhoneStateChange(
             !(num_active + num_held) && is_active_device(*bd_addr)) {
           ag_res.audio_handle = control_block.handle;
 
-          BTIF_TRACE_DEBUG("%s: Moving the audio_state to CONNECTING", __FUNCTION__);
+          BTIF_TRACE_DEBUG("%s: Moving the audio_state to CONNECTING for device %s",
+                      __FUNCTION__, bd_addr->ToString().c_str());
           control_block.audio_state = BTHF_AUDIO_STATE_CONNECTING;
         }
         else
@@ -1830,6 +1899,13 @@ bt_status_t HeadsetInterface::PhoneStateChange(
   }
 
   UpdateCallStates(&btif_hf_cb[idx], num_active, num_held, call_setup_state);
+
+#ifdef BT_IOT_LOGGING_ENABLED
+  if (current_audio_state != BTHF_AUDIO_STATE_CONNECTING && btif_hf_cb[idx].audio_state ==
+      BTHF_AUDIO_STATE_CONNECTING)
+    btif_iot_config_addr_int_add_one(btif_hf_cb[idx].connected_bda,
+        IOT_CONF_KEY_HFP_SCO_CONN_COUNT);
+#endif
   return status;
 }
 

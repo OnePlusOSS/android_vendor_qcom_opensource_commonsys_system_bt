@@ -36,12 +36,15 @@
 #include "btm_int.h"
 #include "btu.h"
 #include "device/include/controller.h"
+#include "device/include/interop.h"
 #include "hcimsgs.h"
 #include "l2c_api.h"
 #include "l2c_int.h"
 #include "l2cdefs.h"
 #include "osi/include/osi.h"
-#include "device/include/interop_config.h"
+#ifdef BT_IOT_LOGGING_ENABLED
+#include "btif/include/btif_iot_config.h"
+#endif
 
 static bool l2c_link_send_to_lower(tL2C_LCB* p_lcb, BT_HDR* p_buf,
                                    tL2C_TX_COMPLETE_CB_INFO* p_cbi);
@@ -94,7 +97,7 @@ bool l2c_link_hci_conn_req(const RawAddress& bd_addr) {
     if (no_links)
       p_lcb->link_role = L2CAP_DESIRED_LINK_ROLE;
 
-    if ((p_lcb->link_role == BTM_ROLE_MASTER)&&(interop_database_match_addr(INTEROP_DISABLE_ROLE_SWITCH, &bd_addr))) {
+    if ((p_lcb->link_role == BTM_ROLE_MASTER)&&(interop_match_addr_or_name(INTEROP_DISABLE_ROLE_SWITCH, &bd_addr))) {
       p_lcb->link_role = BTM_ROLE_SLAVE;
     }
 
@@ -122,7 +125,7 @@ bool l2c_link_hci_conn_req(const RawAddress& bd_addr) {
     else
       p_lcb->link_role = l2cu_get_conn_role(p_lcb);
 
-    if ((p_lcb->link_role == BTM_ROLE_MASTER)&&(interop_database_match_addr(INTEROP_DISABLE_ROLE_SWITCH, &bd_addr))) {
+    if ((p_lcb->link_role == BTM_ROLE_MASTER)&&(interop_match_addr_or_name(INTEROP_DISABLE_ROLE_SWITCH, &bd_addr))) {
       p_lcb->link_role = BTM_ROLE_SLAVE;
       L2CAP_TRACE_WARNING ("l2c_link_hci_conn_req:set link_role= %d",p_lcb->link_role);
     }
@@ -172,6 +175,10 @@ bool l2c_link_hci_conn_comp(uint8_t status, uint16_t handle,
   /* If we don't have one, this is an error */
   if (!p_lcb) {
     L2CAP_TRACE_WARNING("L2CAP got conn_comp for unknown BD_ADDR");
+    if ((status == HCI_SUCCESS) && ((handle | 0xF000) != HCI_INVALID_HANDLE)) {
+      L2CAP_TRACE_WARNING("L2CAP got conn_comp, lcb cleared due to link connection timeout");
+      btm_sec_disconnect(handle, HCI_ERR_HOST_TIMEOUT);
+    }
     return (false);
   }
 
@@ -338,6 +345,39 @@ void l2c_link_sec_comp2(const RawAddress& p_bda,
   }
 }
 
+#ifdef BT_IOT_LOGGING_ENABLED
+/*******************************************************************************
+**
+** Function         l2c_link_iot_store_disc_reason
+**
+** Description      iot store disconnection reason to local conf file
+**
+** Returns          void
+**
+*******************************************************************************/
+static void l2c_link_iot_store_disc_reason(RawAddress& bda, uint8_t reason) {
+  const char* disc_keys[] = {
+      IOT_CONF_KEY_GAP_DISC_CONNTIMEOUT_COUNT,
+    };
+  const uint8_t disc_reasons[] = {
+      HCI_ERR_CONNECTION_TOUT,
+    };
+  int i = 0;
+  int num = sizeof(disc_keys)/sizeof(disc_keys[0]);
+
+  if (reason == (uint8_t) -1)
+    return;
+
+  btif_iot_config_addr_int_add_one(bda, IOT_CONF_KEY_GAP_DISC_COUNT);
+  for (i = 0; i < num; i++) {
+    if (disc_reasons[i] == reason) {
+      btif_iot_config_addr_int_add_one(bda, disc_keys[i]);
+      break;
+    }
+  }
+}
+#endif
+
 /*******************************************************************************
  *
  * Function         l2c_link_hci_disc_comp
@@ -362,6 +402,9 @@ bool l2c_link_hci_disc_comp(uint16_t handle, uint8_t reason) {
   if (!p_lcb) {
     status = false;
   } else {
+#ifdef BT_IOT_LOGGING_ENABLED
+    l2c_link_iot_store_disc_reason(p_lcb->remote_bd_addr, reason);
+#endif
     /* There can be a case when we rejected PIN code authentication */
     /* otherwise save a new reason */
     if (btm_cb.acl_disc_reason != HCI_ERR_HOST_REJECT_SECURITY)

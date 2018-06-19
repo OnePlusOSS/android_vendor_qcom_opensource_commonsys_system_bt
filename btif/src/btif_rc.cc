@@ -685,7 +685,7 @@ void handle_rc_features(btif_rc_device_cb_t* p_dev) {
   BTIF_TRACE_DEBUG("%s: AVDTP Address: %s AVCTP address: %s", __func__,
                    avdtp_addr.ToString().c_str(), rc_addr.ToString().c_str());
 
-  if (interop_match_addr(INTEROP_DISABLE_ABSOLUTE_VOLUME, &rc_addr) ||
+  if (interop_match_addr_or_name(INTEROP_DISABLE_ABSOLUTE_VOLUME, &rc_addr) ||
       absolute_volume_disabled() || avdtp_addr != rc_addr) {
     p_dev->rc_features &= ~BTA_AV_FEAT_ADV_CTRL;
   }
@@ -1153,11 +1153,9 @@ skip:
   /* If AVRC is open and peer sends PLAY but there is no AVDT, then we queue-up
    * this PLAY */
   if ((p_remote_cmd->rc_id == BTA_AV_RC_PLAY) && (!btif_av_is_connected())) {
-    if (p_remote_cmd->key_state == AVRC_STATE_PRESS) {
-      APPL_TRACE_WARNING("%s: AVDT not open, queuing the PLAY command",
-                         __func__);
-      p_dev->rc_pending_play = true;
-    }
+    APPL_TRACE_WARNING("%s: AVDT not open, queuing the PLAY command",
+                       __func__);
+    p_dev->rc_pending_play = true;
     return;
   }
 
@@ -1422,6 +1420,12 @@ void btif_rc_handler(tBTA_AV_EVT event, tBTA_AV* p_data) {
       }
     } break;
     case BTA_AV_RC_OPEN_EVT: {
+      int ver = AVRC_REV_INVALID;
+      ver = sdp_get_stored_avrc_tg_version(p_data->rc_open.peer_addr);
+      if (ver > AVRC_REV_1_3) {
+        BTIF_TRACE_IMP("%s: remote ver > 1.3, add BR feature bit", __func__);
+        p_data->rc_open.peer_features |= BTA_AV_FEAT_BROWSE;
+      }
       BTIF_TRACE_DEBUG("%s: Peer_features: %x", __func__,
                        p_data->rc_open.peer_features);
       handle_rc_connect(&(p_data->rc_open));
@@ -1580,6 +1584,19 @@ uint8_t btif_rc_get_connected_peer_handle(const RawAddress& peer_addr) {
     return BTRC_HANDLE_NONE;
   }
   return p_dev->rc_handle;
+}
+
+/***************************************************************************
+ **
+ ** Function       btif_rc_get_connected_peer_address
+ **
+ ** Description    Fetches the connected headset's address if any
+ **
+ ***************************************************************************/
+RawAddress btif_rc_get_connected_peer_address(uint8_t handle) {
+  btif_rc_device_cb_t* p_dev = NULL;
+  p_dev = btif_rc_get_device_by_handle(handle);
+  return (p_dev == NULL) ? RawAddress::kEmpty : p_dev->rc_addr;
 }
 
 /***************************************************************************
@@ -1900,7 +1917,7 @@ static void btif_rc_upstreams_evt(uint16_t event, tAVRC_COMMAND* pavrc_cmd,
                    ctype, label, pavrc_cmd->reg_notif.event_id);
   RawAddress rc_addr = p_dev->rc_addr;
 
-  if (interop_match_addr(INTEROP_DISABLE_PLAYER_APPLICATION_SETTING_CMDS,
+  if (interop_match_addr_or_name(INTEROP_DISABLE_PLAYER_APPLICATION_SETTING_CMDS,
             &rc_addr))
   {
       if (event == AVRC_PDU_LIST_PLAYER_APP_ATTR || event == AVRC_PDU_GET_PLAYER_APP_VALUE_TEXT ||
@@ -2309,6 +2326,10 @@ bool btif_rc_handle_twsp_symmetric_volume_ctrl(btif_rc_device_cb_t* p_dev, uint8
       (BTM_SecGetTwsPlusPeerDev(p_dev->rc_addr,
                                      tws_addr_pair) == true)) {
     btif_rc_device_cb_t *p_con_dev = btif_rc_get_device_by_bda(&tws_addr_pair);
+    if (p_con_dev == NULL) {
+      BTIF_TRACE_DEBUG("%s:TW+ pair not connected",__func__);
+      return true;
+    }
     if (AVRC_RSP_INTERIM == ctype && p_dev->rc_initial_volume == MAX_VOLUME) {
       if (p_con_dev->rc_volume != MAX_VOLUME){
         BTIF_TRACE_DEBUG("%s:TWS Pair has already set volume,setting rc_volume", __func__);
@@ -3055,7 +3076,7 @@ static bt_status_t register_notification_rsp(
                sizeof(btrc_uid_t));
         break;
       case BTRC_EVT_APP_SETTINGS_CHANGED:
-        if (interop_match_addr(INTEROP_DISABLE_PLAYER_APPLICATION_SETTING_CMDS,
+        if (interop_match_addr_or_name(INTEROP_DISABLE_PLAYER_APPLICATION_SETTING_CMDS,
                     bd_addr))
         {
             BTIF_TRACE_DEBUG("Blacklisted CK for BTRC_EVT_APP_SETTINGS_CHANGED event");

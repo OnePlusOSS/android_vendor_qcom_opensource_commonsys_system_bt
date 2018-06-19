@@ -78,12 +78,14 @@
 #include "btm_int.h"
 #include "device/include/controller.h"
 #include "a2dp_sbc.h"
-#include "device/include/interop_config.h"
 #include "btif/include/btif_a2dp_source.h"
 #include "btif/include/btif_av.h"
 #include "btif/include/btif_hf.h"
 #if (BTA_AR_INCLUDED == TRUE)
 #include "bta_ar_api.h"
+#endif
+#ifdef BT_IOT_LOGGING_ENABLED
+#include "btif/include/btif_iot_config.h"
 #endif
 
 /*****************************************************************************
@@ -838,8 +840,12 @@ static void bta_av_a2dp_sdp_cback(bool found, tA2DP_Service* p_service) {
   } else {
     p_msg->hdr.event =
         (found) ? BTA_AV_SDP_DISC_OK_EVT : BTA_AV_SDP_DISC_FAIL_EVT;
-    if (found && (p_service != NULL))
+    if (found && (p_service != NULL)) {
       p_scb->avdt_version = p_service->avdt_version;
+#ifdef BT_IOT_LOGGING_ENABLED
+      btif_iot_config_addr_set_hex_if_greater(p_scb->peer_addr, IOT_CONF_KEY_A2DP_VERSION, p_scb->avdt_version, 2);
+#endif
+    }
     else
       p_scb->avdt_version = 0x00;
   }
@@ -861,8 +867,8 @@ static void bta_av_a2dp_sdp_cback(bool found, tA2DP_Service* p_service) {
  *
  ******************************************************************************/
 static void bta_av_adjust_seps_idx(tBTA_AV_SCB* p_scb, uint8_t avdt_handle) {
-  APPL_TRACE_DEBUG("%s: codec: %s", __func__,
-                   A2DP_CodecName(p_scb->cfg.codec_info));
+  APPL_TRACE_DEBUG("%s: codec: %s and codec_index = %d", __func__,
+          A2DP_CodecName(p_scb->cfg.codec_info), A2DP_SourceCodecIndex(p_scb->cfg.codec_info));
 #if (TWS_ENABLED == TRUE)
   for (int i = 0; i < BTAV_VENDOR_A2DP_CODEC_INDEX_MAX; i++) {
 #else
@@ -1125,7 +1131,7 @@ void bta_av_do_disc_a2dp(tBTA_AV_SCB* p_scb, tBTA_AV_DATA* p_data) {
           BTM_GetRole(p_scbi->peer_addr, &role);
           APPL_TRACE_DEBUG("%s:Current role for idx %d is %d",__func__, p_scb->hdi, role);
           if (BTM_ROLE_MASTER != role) {
-            if (!interop_database_match_addr(INTEROP_DISABLE_ROLE_SWITCH,
+            if (!interop_match_addr_or_name(INTEROP_DISABLE_ROLE_SWITCH,
                                           &p_scbi->peer_addr)) {
               APPL_TRACE_DEBUG("%s:RS disabled, returning",__func__);
               return;
@@ -1353,10 +1359,17 @@ void bta_av_config_ind(tBTA_AV_SCB* p_scb, tBTA_AV_DATA* p_data) {
     p_info->seid = p_data->str_msg.msg.config_ind.int_seid;
 
     /* Sep type of Peer will be oppsite role to our local sep */
-    if (local_sep == AVDT_TSEP_SRC)
+    if (local_sep == AVDT_TSEP_SRC) {
       p_info->tsep = AVDT_TSEP_SNK;
-    else if (local_sep == AVDT_TSEP_SNK)
+#ifdef BT_IOT_LOGGING_ENABLED
+      btif_iot_config_addr_set_int(p_scb->peer_addr, IOT_CONF_KEY_A2DP_ROLE, IOT_CONF_VAL_A2DP_ROLE_SINK);
+#endif
+    } else if (local_sep == AVDT_TSEP_SNK) {
       p_info->tsep = AVDT_TSEP_SRC;
+#ifdef BT_IOT_LOGGING_ENABLED
+      btif_iot_config_addr_set_int(p_scb->peer_addr, IOT_CONF_KEY_A2DP_ROLE, IOT_CONF_VAL_A2DP_ROLE_SOURCE);
+#endif
+    }
 
     p_scb->role |= BTA_AV_ROLE_AD_ACP;
     p_scb->cur_psc_mask = p_evt_cfg->psc_mask;
@@ -1547,7 +1560,7 @@ void bta_av_setconfig_rsp(tBTA_AV_SCB* p_scb, tBTA_AV_DATA* p_data) {
  *
  ******************************************************************************/
 #if (TWS_ENABLED == TRUE)
-static void bta_av_set_tws_chn_mode(tBTA_AV_SCB *p_scb) {
+void bta_av_set_tws_chn_mode(tBTA_AV_SCB *p_scb, bool adjust) {
   int i;
   tBTA_AV_SCB *p_scbi;
   RawAddress tws_pair_addr;
@@ -1561,12 +1574,22 @@ static void bta_av_set_tws_chn_mode(tBTA_AV_SCB *p_scb) {
       if (BTM_SecGetTwsPlusPeerDev(p_scb->peer_addr,
                                tws_pair_addr) == true) {
         if (tws_pair_addr ==  p_scbi->peer_addr) {
-          if (p_scbi->channel_mode == 0) {
-            p_scb->channel_mode = 1;//Right
-            APPL_TRACE_DEBUG("%s:setting channel mode to Right",__func__);
-          } else {
-            p_scb->channel_mode = 0;//Left
-            APPL_TRACE_DEBUG("%s:setting channel mode to Left",__func__);
+          if (!adjust) {//set role on connection
+            if (p_scbi->channel_mode == 0) {
+              p_scb->channel_mode = 1;//Right
+              APPL_TRACE_DEBUG("%s:setting channel mode to Right",__func__);
+            } else {
+              p_scb->channel_mode = 0;//Left
+              APPL_TRACE_DEBUG("%s:setting channel mode to Left",__func__);
+            }
+          } else {//one of the earbuds role is set, adjust the role
+            if (p_scb->channel_mode == 0) {
+              p_scbi->channel_mode = 1;//Right
+              APPL_TRACE_DEBUG("%s:setting channel mode to Right",__func__);
+            } else {
+              p_scbi->channel_mode = 0;//Left
+              APPL_TRACE_DEBUG("%s:setting channel mode to Left",__func__);
+            }
           }
           APPL_TRACE_ERROR("%s:tws pair found",__func__);
           is_tws_pair = true;
@@ -1667,7 +1690,7 @@ void bta_av_str_opened(tBTA_AV_SCB* p_scb, tBTA_AV_DATA* p_data) {
     if (p != NULL) {
       if (HCI_EDR_ACL_2MPS_SUPPORTED(p)) open.edr |= BTA_AV_EDR_2MBPS;
       if (HCI_EDR_ACL_3MPS_SUPPORTED(p)) {
-        if (!interop_match_addr(INTEROP_2MBPS_LINK_ONLY, &p_scb->peer_addr)) {
+        if (!interop_match_addr_or_name(INTEROP_2MBPS_LINK_ONLY, &p_scb->peer_addr)) {
           open.edr |= BTA_AV_EDR_3MBPS;
         }
       }
@@ -1688,7 +1711,7 @@ void bta_av_str_opened(tBTA_AV_SCB* p_scb, tBTA_AV_DATA* p_data) {
     APPL_TRACE_DEBUG("%s:audio count  = %d ",__func__, bta_av_cb.audio_open_cnt);
     if (p_scb->tws_device && bta_av_cb.audio_open_cnt > 1) {
       APPL_TRACE_DEBUG("%s: 2nd TWS device, set channel mode",__func__);
-      bta_av_set_tws_chn_mode(p_scb);
+      bta_av_set_tws_chn_mode(p_scb, false);
     }
 #endif
     if (open.starting) {
@@ -2459,6 +2482,7 @@ void bta_av_reconfig(tBTA_AV_SCB* p_scb, tBTA_AV_DATA* p_data) {
     bta_av_ssm_execute(p_scb, BTA_AV_SDP_DISC_OK_EVT, NULL);
     return;
   }
+  btav_a2dp_codec_index_t curr_codec_index = A2DP_SourceCodecIndex(p_scb->cfg.codec_info);
   p_cfg = &p_scb->cfg;
 
   alarm_cancel(p_scb->avrc_ct_timer);
@@ -2486,7 +2510,6 @@ void bta_av_reconfig(tBTA_AV_SCB* p_scb, tBTA_AV_DATA* p_data) {
                      p_rcfg->suspend,
                      p_scb->recfg_sup,
                      p_scb->suspend_sup);
-  btav_a2dp_codec_index_t curr_codec_index = A2DP_SourceCodecIndex(p_scb->cfg.codec_info);
   btav_a2dp_codec_index_t rcfg_codec_index = A2DP_SourceCodecIndex(p_cfg->codec_info);
   APPL_TRACE_DEBUG("curr_index: %d, rcfg_index: %d",curr_codec_index,rcfg_codec_index);
   // p_scb->sep_info_idx > p_scb->num_seps condition satified for remote initiated SetConfig
@@ -3258,16 +3281,11 @@ void bta_av_rcfg_cfm(tBTA_AV_SCB* p_scb, tBTA_AV_DATA* p_data) {
   // Disable AVDTP RECONFIGURE for blacklisted devices
   bool disable_avdtp_reconfigure = false;
   {
-    char remote_name[BTM_MAX_REM_BD_NAME_LEN] = "";
-    if (btif_storage_get_stored_remote_name(p_scb->peer_addr, remote_name)) {
-      if (interop_match_name(INTEROP_DISABLE_AVDTP_RECONFIGURE, remote_name) ||
-          interop_match_addr(INTEROP_DISABLE_AVDTP_RECONFIGURE,
-                             (const RawAddress*)&p_scb->peer_addr)) {
-        VLOG(1) << __func__ << ": disable AVDTP RECONFIGURE: interop matched "
-                               "name "
-                << remote_name << " address " << p_scb->peer_addr;
-        disable_avdtp_reconfigure = true;
-      }
+    if (interop_match_addr_or_name(INTEROP_DISABLE_AVDTP_RECONFIGURE,
+                           (const RawAddress*)&p_scb->peer_addr)) {
+      VLOG(1) << __func__ << ": disable AVDTP RECONFIGURE: interop matched address "
+                          << p_scb->peer_addr;
+      disable_avdtp_reconfigure = true;
     }
   }
 
@@ -3648,9 +3666,11 @@ void offload_vendor_callback(tBTM_VSC_CMPL *param)
       default:
       break;
     }
-  } else if (status == QHCI_INVALID_VSC && sub_opcode == VS_QHCI_A2DP_OFFLOAD_START) {
+  } else if ((status == QHCI_INVALID_VSC && sub_opcode == VS_QHCI_A2DP_OFFLOAD_START)
+      || (status == QHCI_INVALID_VSC && last_sent_vsc_cmd == VS_QHCI_A2DP_OFFLOAD_START)) {
     btif_a2dp_src_vsc.multi_vsc_support = true;
     bta_av_vendor_offload_start(offload_start.p_scb);
+    last_sent_vsc_cmd = 0;
   } else {
     APPL_TRACE_DEBUG("Offload failed for subopcode= %d",param->p_param_buf[1]);
     if (param->opcode != VS_QHCI_STOP_A2DP_MEDIA)
@@ -3719,8 +3739,9 @@ void bta_av_vendor_offload_start(tBTA_AV_SCB* p_scb)
   APPL_TRACE_DEBUG("%s: Last cached VSC command: 0x0%x", __func__, last_sent_vsc_cmd);
   APPL_TRACE_IMP("bta_av_vendor_offload_start: vsc flags:-"
     "vs_configs_exchanged:%u tx_started:%u tx_start_initiated:%u"
-    "tx_enc_update_initiated:%u", btif_a2dp_src_vsc.vs_configs_exchanged, btif_a2dp_src_vsc.tx_started,
-    btif_a2dp_src_vsc.tx_start_initiated, tx_enc_update_initiated);
+    "tx_enc_update_initiated:%u tx_stop_initiated: %u", btif_a2dp_src_vsc.vs_configs_exchanged,
+    btif_a2dp_src_vsc.tx_started, btif_a2dp_src_vsc.tx_start_initiated, tx_enc_update_initiated,
+    btif_a2dp_src_vsc.tx_stop_initiated);
   enc_update_in_progress = FALSE;
   if (btif_a2dp_src_vsc.multi_vsc_support) {
     unsigned char status = 0;
@@ -3738,6 +3759,12 @@ void bta_av_vendor_offload_start(tBTA_AV_SCB* p_scb)
         && (!btif_a2dp_src_vsc.tx_start_initiated || tx_enc_update_initiated)) {
       btif_a2dp_src_vsc.tx_start_initiated = TRUE;
       tx_enc_update_initiated = FALSE;
+      if (last_sent_vsc_cmd == VS_QHCI_START_A2DP_MEDIA) {
+        APPL_TRACE_DEBUG("%s: START VSC already exchanged.", __func__);
+        status = 0;
+        (*bta_av_cb.p_cback)(BTA_AV_OFFLOAD_START_RSP_EVT, (tBTA_AV*)&status);
+        return;
+      }
       if(btif_a2dp_src_vsc.vs_configs_exchanged) {
         param[0] = VS_QHCI_START_A2DP_MEDIA;
         param[1] = 0;
@@ -3809,6 +3836,7 @@ void bta_av_vendor_offload_start(tBTA_AV_SCB* p_scb)
     param_len += AVDT_CODEC_SIZE;
     BTM_VendorSpecificCommand(HCI_VSQC_CONTROLLER_A2DP_OPCODE, param_len,
                                  param, offload_vendor_callback);
+    last_sent_vsc_cmd = VS_QHCI_A2DP_OFFLOAD_START;
     offload_start.p_scb = p_scb;
   }
 }

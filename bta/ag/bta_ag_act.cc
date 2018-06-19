@@ -72,6 +72,9 @@
 #include "bta_ag_twsp_dev.h"
 #include "bta_ag_twsp.h"
 #endif
+#ifdef BT_IOT_LOGGING_ENABLED
+#include "btif/include/btif_iot_config.h"
+#endif
 
 /*****************************************************************************
  *  Constants
@@ -287,6 +290,10 @@ void bta_ag_disc_int_res(tBTA_AG_SCB* p_scb, tBTA_AG_DATA* p_data) {
 
       /* send ourselves sdp ok event */
       event = BTA_AG_DISC_OK_EVT;
+
+#ifdef BT_IOT_LOGGING_ENABLED
+      btif_iot_config_addr_set_hex_if_greater(p_scb->peer_addr, IOT_CONF_KEY_HFP_VERSION, p_scb->peer_version, 2);
+#endif
     }
   }
 
@@ -335,6 +342,9 @@ void bta_ag_disc_acp_res(tBTA_AG_SCB* p_scb, tBTA_AG_DATA* p_data) {
       p_data->disc_result.status == SDP_DB_FULL) {
     /* get attributes */
     bta_ag_sdp_find_attr(p_scb, bta_ag_svc_mask[p_scb->conn_service]);
+#ifdef BT_IOT_LOGGING_ENABLED
+    btif_iot_config_addr_set_hex_if_greater(p_scb->peer_addr, IOT_CONF_KEY_HFP_VERSION, p_scb->peer_version, 2);
+#endif
   }
 
   /* free discovery db */
@@ -390,6 +400,10 @@ void bta_ag_open_fail(tBTA_AG_SCB* p_scb, tBTA_AG_DATA* p_data) {
  *
  ******************************************************************************/
 void bta_ag_rfc_fail(tBTA_AG_SCB* p_scb, UNUSED_ATTR tBTA_AG_DATA* p_data) {
+  RawAddress peer_addr = p_scb->peer_addr;
+  tBTA_AG_DATA data;
+
+  memset(&data, 0, sizeof(data));
   /* reinitialize stuff */
   p_scb->conn_handle = 0;
   p_scb->conn_service = 0;
@@ -405,8 +419,9 @@ void bta_ag_rfc_fail(tBTA_AG_SCB* p_scb, UNUSED_ATTR tBTA_AG_DATA* p_data) {
   /* reopen registered servers */
   bta_ag_start_servers(p_scb, p_scb->reg_services);
 
+  data.api_open.bd_addr = peer_addr;
   /* call open cback w. failure */
-  bta_ag_cback_open(p_scb, NULL, BTA_AG_FAIL_RFCOMM);
+  bta_ag_cback_open(p_scb, &data, BTA_AG_FAIL_RFCOMM);
 }
 
 /*******************************************************************************
@@ -587,7 +602,7 @@ void bta_ag_rfc_acp_open(tBTA_AG_SCB* p_scb, tBTA_AG_DATA* p_data) {
   /* get bd addr of peer */
   if (PORT_SUCCESS != (status = PORT_CheckConnection(p_data->rfc.port_handle,
                                                      dev_addr, &lcid))) {
-    APPL_TRACE_DEBUG(
+    APPL_TRACE_ERROR(
         "bta_ag_rfc_acp_open error PORT_CheckConnection returned status %d",
         status);
   }
@@ -627,7 +642,6 @@ void bta_ag_rfc_acp_open(tBTA_AG_SCB* p_scb, tBTA_AG_DATA* p_data) {
           bta_ag_resume_open(other_scb);
         }
       }
-
       break;
     }
   }
@@ -738,7 +752,12 @@ void bta_ag_rfc_data(tBTA_AG_SCB* p_scb, UNUSED_ATTR tBTA_AG_DATA* p_data) {
 void bta_ag_start_close(tBTA_AG_SCB* p_scb, tBTA_AG_DATA* p_data) {
   /* Take the link out of sniff and set L2C idle time to 0 */
   bta_dm_pm_active(p_scb->peer_addr);
-  L2CA_SetIdleTimeoutByBdAddr(p_scb->peer_addr, 0, BT_TRANSPORT_BR_EDR);
+
+  if (p_scb->svc_conn) {
+    APPL_TRACE_WARNING("%s: SLC is up, probably user initiated HF disconnection" \
+                       " setting L2CAP idle timer to 0 from AG", __func__);
+    L2CA_SetIdleTimeoutByBdAddr(p_scb->peer_addr, 0, BT_TRANSPORT_BR_EDR);
+  }
 
   /* if SCO is open close SCO and wait on RFCOMM close */
   if (bta_ag_sco_is_open(p_scb)) {
@@ -994,4 +1013,43 @@ void bta_ag_setcodec(tBTA_AG_SCB* p_scb, tBTA_AG_DATA* p_data) {
   }
 
   (*bta_ag_cb.p_cback)(BTA_AG_WBS_EVT, (tBTA_AG*)&val);
+}
+
+/*******************************************************************************
+ *
+ * Function         bta_ag_collision_timer_cback
+ *
+ * Description      AG connection collision timer callback
+ *
+ *
+ * Returns          void
+ *
+ ******************************************************************************/
+static void bta_ag_collision_timer_cback(void* data) {
+  tBTA_AG_SCB* p_scb = (tBTA_AG_SCB*)data;
+
+  APPL_TRACE_DEBUG("%s", __func__);
+
+  /* If the peer haven't opened AG connection     */
+  /* we will restart opening process.             */
+  bta_ag_resume_open(p_scb);
+}
+
+void bta_ag_handle_collision(tBTA_AG_SCB* p_scb,
+                             tBTA_AG_DATA* data) {
+  /* Cancel SDP if it had been started. */
+  if (p_scb->p_disc_db) {
+    SDP_CancelServiceSearch(p_scb->p_disc_db);
+    bta_ag_free_db(p_scb, NULL);
+  }
+
+  /* reopen registered servers */
+  /* Collision may be detected before or after we close servers. */
+  if (bta_ag_is_server_closed(p_scb)) {
+    bta_ag_start_servers(p_scb, p_scb->reg_services);
+  }
+
+  /* Start timer to han */
+  alarm_set_on_mloop(p_scb->collision_timer, BTA_AG_COLLISION_TIMEOUT_MS,
+                     bta_ag_collision_timer_cback, p_scb);
 }

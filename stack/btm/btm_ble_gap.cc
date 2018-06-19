@@ -51,6 +51,9 @@
 #include "gattdefs.h"
 #include "l2c_int.h"
 #include "osi/include/log.h"
+#ifdef BT_IOT_LOGGING_ENABLED
+#include "btif/include/btif_iot_config.h"
+#endif
 
 #define BTM_BLE_NAME_SHORT 0x01
 #define BTM_BLE_NAME_CMPL 0x02
@@ -2160,17 +2163,7 @@ void btm_ble_process_phy_update_pkt(uint8_t len, uint8_t* data) {
   STREAM_TO_UINT8(tx_phy, p);
   STREAM_TO_UINT8(rx_phy, p);
 
-  tBTM_SEC_DEV_REC* p_dev_rec = btm_find_dev_by_handle(handle);
-  if (!p_dev_rec) {
-    BTM_TRACE_WARNING("%s: No Device Found!", __func__);
-    return;
-  }
-
-  tGATT_TCB* p_tcb =
-      gatt_find_tcb_by_addr(p_dev_rec->ble.pseudo_addr, BT_TRANSPORT_LE);
-  if (p_tcb == NULL) return;
-
-  gatt_notify_phy_updated(p_tcb, tx_phy, rx_phy, status);
+  gatt_notify_phy_updated(status, handle, tx_phy, rx_phy);
 }
 
 /*******************************************************************************
@@ -2470,6 +2463,15 @@ void btm_ble_read_remote_features_complete(uint8_t* p) {
 
   if (status == HCI_SUCCESS) {
     STREAM_TO_ARRAY(btm_cb.acl_db[idx].peer_le_features, p, BD_FEATURES_LEN);
+#ifdef BT_IOT_LOGGING_ENABLED
+    /* save LE remote supported features to iot conf file */
+    char key[64];
+    sprintf(key, "%s%s%x", IOT_CONF_KEY_LE_RT_FEATURES,
+            "_", 0);
+
+    btif_iot_config_addr_set_bin(btm_cb.acl_db[idx].remote_addr, key,
+            btm_cb.acl_db[idx].peer_le_features, BD_FEATURES_LEN);
+#endif
   }
 
   btsnd_hcic_rmt_ver_req(handle);
