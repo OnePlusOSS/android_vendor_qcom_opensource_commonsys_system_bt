@@ -40,9 +40,6 @@
 #include "hcimsgs.h"
 #include "osi/include/osi.h"
 #include "osi/include/properties.h"
-#ifdef BT_IOT_LOGGING_ENABLED
-#include "btif/include/btif_iot_config.h"
-#endif
 
 #if (BTM_SCO_INCLUDED == TRUE)
 
@@ -848,10 +845,6 @@ void btm_sco_conn_req(const RawAddress& bda, DEV_CLASS dev_class,
   uint16_t xx;
   tBTM_ESCO_CONN_REQ_EVT_DATA evt_data;
 
-#ifdef BT_IOT_LOGGING_ENABLED
-    btif_iot_config_addr_int_add_one(bda, IOT_CONF_KEY_HFP_SCO_CONN_COUNT);
-#endif
-
   for (xx = 0; xx < BTM_MAX_SCO_LINKS; xx++, p++) {
     /*
      * If the sco state is in the SCO_ST_CONNECTING state, we still need
@@ -980,13 +973,8 @@ void btm_sco_connected(uint8_t hci_status, const RawAddress* bda,
           if (p->state == SCO_ST_CONNECTING) {
             p->state = SCO_ST_UNUSED;
             (*p->p_disc_cb)(xx);
-          } else {
+          } else
             p->state = SCO_ST_LISTENING;
-#ifdef BT_IOT_LOGGING_ENABLED
-            if (bda)
-              btif_iot_config_addr_int_add_one(*bda, IOT_CONF_KEY_HFP_SCO_CONN_FAIL_COUNT);
-#endif
-          }
         }
 
         return;
@@ -1054,15 +1042,17 @@ uint16_t btm_find_scb_by_handle(uint16_t handle) {
  *
  ******************************************************************************/
 tBTM_STATUS BTM_RemoveSco(uint16_t sco_inx) {
+  BTM_TRACE_DEBUG("%s", __func__);
 #if (BTM_MAX_SCO_LINKS > 0)
+  if (sco_inx >= BTM_MAX_SCO_LINKS)
+    return (BTM_UNKNOWN_ADDR);
+
   tSCO_CONN* p = &btm_cb.sco_cb.sco_db[sco_inx];
   uint16_t tempstate;
   tBTM_PM_STATE state = BTM_PM_ST_INVALID;
 
-  BTM_TRACE_DEBUG("%s", __func__);
-
   /* Validity check */
-  if ((sco_inx >= BTM_MAX_SCO_LINKS) || (p->state == SCO_ST_UNUSED))
+  if (p->state == SCO_ST_UNUSED)
     return (BTM_UNKNOWN_ADDR);
 
   /* If no HCI handle, simply drop the connection and return */

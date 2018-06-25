@@ -108,7 +108,8 @@ extern void BTM_BleObtainVendorCapabilities(tBTM_BLE_VSC_CB* p_cmn_vsc_cb);
  * This function is called to set scan parameters. |cb| is called with operation
  * status
  **/
-extern void BTM_BleSetScanParams(uint32_t scan_interval, uint32_t scan_window,
+extern void BTM_BleSetScanParams(uint8_t scan_phy, std::vector<uint32_t> scan_interval,
+                                 std::vector<uint32_t> scan_window,
                                  tBLE_SCAN_MODE scan_type,
                                  base::Callback<void(uint8_t)> cb);
 
@@ -721,20 +722,6 @@ extern tBTM_STATUS BTM_BleStackEnable(bool enable);
 extern bool BTM_GetLeSecurityState(const RawAddress& bd_addr,
                                    uint8_t* p_le_dev_sec_flags,
                                    uint8_t* p_le_key_size);
-
-#ifdef BT_IOT_LOGGING_ENABLED
-/*******************************************************************************
-*
-* Function         BTM_GetRemoteDeviceName
-*
-* Description      This function is called to get the dev name of remote device
-*                  from NV
-*
-* Returns          true if success; otherwise failed.
-*
-*******************************************************************************/
-extern bool BTM_GetRemoteDeviceName(const RawAddress& bda, BD_NAME bd_name);
-#endif
 
 /*******************************************************************************
  *
