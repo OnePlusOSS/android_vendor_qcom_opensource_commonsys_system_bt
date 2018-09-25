@@ -31,7 +31,7 @@ btifCommonIncludes = [
 
 // libbtif static library for target
 // ========================================================
-cc_library_static {
+/*cc_library_static {
     name: "libbtif_qti",
     defaults: ["fluoride_defaults_qti"],
     include_dirs: btifCommonIncludes,
@@ -111,7 +111,7 @@ cc_library_static {
     ],
     cflags: ["-DBUILDCFG"],
 
-}
+}*/
 
 // btif unit tests for target
 // ========================================================
